@@ -36,7 +36,6 @@ Suggests:
     mlmRev,
     bbmle (>= 1.0.19),
     pscl,
-    MCMCpack,
     coda,
     reshape2
 VignetteBuilder: knitr
