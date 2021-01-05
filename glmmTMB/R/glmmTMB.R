@@ -17,123 +17,92 @@ startParams <- function(parameters,
                         weights,
                         contrasts,
                         size = NULL,
+                        Xd = NULL,
                         family,
                         condReStruc,
                         start = NULL,
                         map = NULL,
                         seed = NULL,
-                        jitter.var = 0) {
+                        jitter.sd = 0,
+                        jitter.res = F) {
   if(!is.null(seed)) set.seed(seed)
-  favalues <- function(yobs, mu, weights, fr, formula, ziformula, dispformula, condReStruc, family, phi = NULL, jitter.var = 0){
+  # get the starting values for the factor loadings and latent variables
+  rrValues <- function(yobs, mu, weights, fr,
+                       formula, ziformula, dispformula,
+                       condReStruc, family, phi = NULL,
+                       start.met, jitter.sd = 0,
+                       jitter.res = F){
     nobs <- length(yobs)
     fam <- family$family
     rank <- vapply(condReStruc, function(x) x[["blockRank"]], numeric(1))
     nlv <- rank[rank > 0]
     namBlk <- names(nlv)
+    ntheta <- sum(sapply(1:length(namBlk), function(x) condReStruc[[namBlk[x]]]$blockNumTheta))
 
     resid <- rep(NA, nobs)
-    if(fam != "poisson"){
-      # need to test this... not normal
+    if(start.met == "res" || start.met == "jitter.res") {
       resid <- family$dev.resids(y = yobs, mu = mu, wt = weights)
-    }else{
+      if(jitter.res)
+        resid <- resid  + rnorm(length(resid), 0, jitter.sd)
+    }
+    if (start.met == "ds.res") {
       # ### Get the dunn smyth residuals
-      if(fam == "poisson") {
+      if (fam == "poisson") {
         a <- ppois(yobs - 1, mu)
         b <- ppois(yobs, mu)
         u <- runif(n = nobs, min = a, max = b)
         resid <- qnorm(u)
-        # if (fam == "nbinom1") { #nbinom1 linear linear parameterization (Hardin & Hilbe 2007). V=mu*(1+phi)
-        #   a <- pnbinom(yobs - 1, mu =  mu, size = mu/phi)
-        #   b <- pnbinom(yobs, mu =  mu, size = mu/ phi)
-        #   u <- runif(n = nobs, min = a, max = b)
-        #   resid <- qnorm(u)
-        # }
-        # if (fam == "nbinom2") { #nbinom2 quadratic parameterization (Hardin & Hilbe 2007). V=mu*(1+mu/phi) = mu+mu^2/phi.
-        #   # Only including this to check against gllvm
-        #   phi <- phi + 1e-05
-        #   a <- pnbinom(yobs - 1, mu =  mu, size = phi)
-        #   b <- pnbinom(yobs, mu =  mu, size = phi)
-        #   u <- runif(n = nobs, min = a, max = b)
-        #   resid <- qnorm(u)
-        # }
-        # if (fam == "binomial") {
-        #   a <- pbinom(yobs - 1, 1, mu)
-        #   b <- pbinom(yobs, 1, mu)
-        #   u <- runif(n = nobs, min = a, max = b)
-        #   resid <- qnorm(u)
-        # }
-        # if (fam == "gaussian") {
-        #   # phi is the variance
-        #   a <- pnorm(yobs, mean =  mu, sd = sqrt(phi))
-        #   b <- pnorm(yobs, mean =  mu, sd = sqrt(phi))
-        #   u <- runif(n = nobs, min = a, max = b)
-        #   resid <- qnorm(u)
-        # }
+      }
+      if (fam == "nbinom2") {
+        #nbinom2 quadratic parameterization (Hardin & Hilbe 2007). V=mu*(1+mu/phi) = mu+mu^2/phi.
+        phi <- phi + 1e-05
+        a <- pnbinom(yobs - 1, mu =  mu, size = phi)
+        b <- pnbinom(yobs, mu =  mu, size = phi)
+        u <- runif(n = nobs, min = a, max = b)
+        resid <- qnorm(u)
+      }
+      if (fam == "binomial"){
+        a <- pbinom(yobs - 1, 1, mu)
+        b <- pbinom(yobs, 1, mu)
+        u <- runif(n = nobs, min = a, max = b)
+        resid <- qnorm(u)
       }
     }
-
-
     resid[is.infinite(resid)] <- 0; resid[is.nan(resid)] <- 0
     resid <- as.data.frame(resid)
 
+    par.list <- vector("list", length = 3)
+    names(par.list) <- c("theta", "b", "fact_load")
     # Use glmmTMB to get initial starting values for factor loadings and latent variables
-    # I have not implemented it for other random effect terms... do we want to fit all of the re?
     fr.res <- cbind(fr, resid)
     ranForm <- findbars(RHSForm(formula))
-    rrTrm <- as.character(ranForm[ranForm==namBlk][[1]])
-    x <- paste(rrTrm[2], rrTrm[1], rrTrm[3])
-    resForm <- formula(paste("resid ~ 0 +", "rr(", x , ",", nlv, ")"))
-
-    # Fixing sd to 1
-    fit.res <- glmmTMB(resForm, data = fr.res, family = gaussian,
-                       start=list(betad = c(log(1))), map = list(betad = factor(c(NA)))) #residual model
-    par.list <- fit.res$obj$env$parList(fit.res$fit$par, fit.res$fit$parfull)
-    # fact.load <- fit.res$obj$env$report(fit.res$fit$parfull)$fact_load[[1]]
-
-    # ### apply factor analysis to the DS residuals
-    # NEED to generalize this!
-    # n <- condReStruc[[namBlk]]$blockReps
-    # p <- condReStruc[[namBlk]]$blockSize
-    # resid$id <- fr$id #TMBStruc$condList$reTrms$flist
-    # resid$grp <- fr$species
-    # resi <- reshape(resid, timevar ="grp", idvar = "id", direction = "wide")
-    # resi <- resi[,-1] #removing id
-    # if (n > p){
-    #   fa  <-  try(factanal(resi,factors=nlv,scores = "regression"))
-    #   lambda <- matrix(fa$loadings,p,nlv)
-    #   index <- fa$scores
-    # } else if(n < p){
-    #   fa  <-  try(factanal(t(resi), factors=nlv, rotation = "varimax",scores = "regression"))
-    #   lambda <- fa$scores
-    #   index <- matrix(fa$loadings,n, nlv)
-    # }
-    # #### Get the upper matrix of the loadings by applying QR decompositon
-    # if(nlv > 1 & p > 2){
-    #   qr.decom <- qr(t(lambda))
-    #   sgn <- sign(diag(qr.R(qr.decom)))
-    #   R.new <- diag(sgn) %*% qr.R(qr.decom)
-    #   Q.new <- qr.Q(qr.decom) %*% diag(sgn)
-    #
-    #   index<-index%*%Q.new
-    #   index <- as.vector(t(index))
-    #
-    #   loglam <- log(diag(R.new))
-    #   lam <- t(R.new)[t(upper.tri(R.new))]
-    #   theta <- c(loglam, lam)
-    # } else {
-    #   sig <- sign(diag(lambda));
-    #   lambda <- t(t(lambda)*sig)
-    #   index <- t(t(index)*sig)
-    #   theta <- lambda
-    # }
-    par.list$b <-  par.list$b + rnorm(length(par.list$b), 0, 1*jitter.var)
+    nrr <- length(namBlk)
+    rrTrm <- lapply(1:length(namBlk), function(x) as.character(ranForm[ranForm == namBlk][[x]]))
+    x <- sapply(1:nrr, function(x) paste(rrTrm[[x]][2], rrTrm[[x]][1], rrTrm[[x]][3]))
+    resForm <- formula(paste("resid ~ 0 "))
+    for(i in 1:nrr){
+      rrForm <- formula(paste("~ rr(", x[i], ",", nlv[i], ")"))
+      resForm <- addForm(resForm,rrForm)
+    }
+    # residual model; assuming gaussian and fixing sd to 1
+    fit.res <- glmmTMB(resForm, data = fr.res, family = gaussian, start = list(betad = c(log(1)) ), map = list(betad = factor(c(NA))))
+    par.list$theta <- fit.res$obj$env$parList(fit.res$fit$par, fit.res$fit$parfull)$theta
+    par.list$b <- fit.res$obj$env$parList(fit.res$fit$par, fit.res$fit$parfull)$b
+    # Add jitter to latent variables
+    par.list$b <- par.list$b + rnorm(length(par.list$b), 0, jitter.sd)
 
     return(par.list)
   }
 
-  startVals <-  function(yobs, weights, fr, family, formula, ziformula, dispformula, condReStruc, parameters, jitter.var){
+  # get the starting values for the fixed parameters and for the rr parameters (theta and b)
+  startVals <-  function(yobs, weights, fr, Xd,
+                         family, formula, ziformula, dispformula,
+                         condReStruc, parameters, start.met,
+                         jitter.sd, jitter.res = F){
+    start <- parameters #starting parameters
+
     fam <- family$family
-    ### fit a glmm
+    ### fit a glm
     fixedform <- formula
     RHSForm(fixedform) <- nobars(RHSForm(fixedform))
     fit.fixed <- glmmTMB(fixedform, ziformula = ziformula, dispformula = dispformula,
@@ -142,27 +111,31 @@ startParams <- function(parameters,
     nu <- predict(fit.fixed)
     mu <- family$linkinv(nu)
 
-    start <- parameters #starting parameters
+    if(length(fixed.pars$betad) != 0)
+      phi <- as.matrix(Xd) %*% exp(fixed.pars$betad) #FIX: should look at sparse version
+    # obtain residuals and get starting values for rr
+    rrStart <- rrValues(yobs, mu, weights, fr, formula, ziformula, dispformula,
+                        condReStruc, family, phi, start.met,
+                        jitter.sd, jitter.res)
+
+    start.fixed <- fixed.pars
+    # Set starting values for fixed parameters from model fit.fixed
     fix.names <- !(names(start) %in% c("b", "theta"))
     for (i in names(start)[fix.names]) {
-      if (length(start[[i]]) > 0 & (length(fixed.pars[[i]]) == length(start[[i]])))
-        start[[i]] <- fixed.pars[[i]]
+      if (length(start[[i]]) > 0 & (length(start.fixed[[i]]) == length(start[[i]])))
+        start[[i]] <- start.fixed[[i]]
     }
 
-    # (apply factor analysis) to residuals and get starting values for rr
-    fastart <- favalues(yobs, mu, weights, fr, formula,ziformula, dispformula, condReStruc,
-                        family, phi, jitter.var)
-
     # Change starting parameters for b and theta for the rr structure
-    tp <- 1  #theta position
-    bp <- 1  #b positon
+    tp <- trrp <- 1  #theta position for full model, and for model with only rr
+    bp <- brrp <- 1  #b position for full model, and for model with only rr
     for (j in seq_along(condReStruc)) {
       nt <- condReStruc[[j]]$blockNumTheta
       if (condReStruc[[j]]$blockRank > 0) {
-        # This is assuming only one rr structure in fastart
         nb <- condReStruc[[j]]$blockRank * condReStruc[[j]]$blockReps
-        start$b[bp:(bp + nb - 1)] <- fastart$b
-        start$theta[tp:(tp + nt - 1)] <- fastart$theta
+        start$b[bp:(bp + nb - 1)] <- rrStart$b[brrp:(brrp + nb - 1)]
+        start$theta[tp:(tp + nt - 1)] <- rrStart$theta[trrp:(trrp + nt - 1)]
+        brrp <- brrp + nb; trrp <- trrp + nt
       }else{
         nb <- condReStruc[[j]]$blockReps * condReStruc[[j]]$blockSize
       }
@@ -172,11 +145,13 @@ startParams <- function(parameters,
     return(start)
   }
 
-  if(start == "res"){
-    start <- startVals(yobs, weights, fr,
-                       family, formula, ziformula, dispformula,
-                       condReStruc, parameters, jitter.var)
-  }
+    if(start == "res" || start == "ds.res" || start == "jitter.res"){
+        start.met <- start
+        start <- startVals(yobs, weights, fr, Xd,
+                           family, formula, ziformula, dispformula,
+                           condReStruc, parameters, start.met,
+                           jitter.sd, jitter.res)
+    }
 
   for (p in names(start)) {
     if (!(p %in% names(parameters))) {
@@ -189,6 +164,7 @@ startParams <- function(parameters,
     }
     parameters[[p]] <- start[[p]]
   }
+
   return(parameters)
 }
 
@@ -232,7 +208,8 @@ mkTMBStruc <- function(formula, ziformula, dispformula,
                        map=NULL,
                        sparseX=NULL,
                        seed = NULL,
-                       jitter.var = 0) {
+                       jitter.sd = 0,
+                       jitter.res = F) {
 
   if(!is.null(seed)) set.seed(seed)
   ## handle family specified as naked list
@@ -302,7 +279,7 @@ mkTMBStruc <- function(formula, ziformula, dispformula,
                             contrasts=contrasts, sparse=sparseX[["disp"]])
 
     condReStruc <- with(condList, getReStruc(reTrms, ss, aa))
-    ziReStruc <- with(ziList, getReStruc(reTrms, ss))
+    ziReStruc <- with(ziList, getReStruc(reTrms, ss, aa))
 
     grpVar <- with(condList, getGrpVar(reTrms$flist))
 
@@ -418,6 +395,23 @@ mkTMBStruc <- function(formula, ziformula, dispformula,
     b
   }
 
+  # theta is 0, except if dorr, theta is 1
+  t01 <- function(dorr, condReStruc){
+    theta <- rr0(sum(getVal(condReStruc,"blockNumTheta")))
+    if(dorr){
+      nt <- 1
+      blockNumTheta <- getVal(condReStruc,"blockNumTheta")
+      blockCode <- getVal(condReStruc, "blockCode")
+      for (i in 1:length(blockCode)) {
+        if(blockCode[i]==9){
+          theta[nt:(nt + blockNumTheta[i] - 1)] <- rep(1, blockNumTheta[i])
+        }
+        nt <- nt + blockNumTheta[i]
+      }
+    }
+    theta
+  }
+
   parameters <- with(data.tmb,
                      list(
                        beta    = rep(beta_init, max(ncol(X),ncol(XS))),
@@ -425,7 +419,7 @@ mkTMBStruc <- function(formula, ziformula, dispformula,
                        b       = b0(Z, dorr, condReStruc),
                        bzi     = rr0(ncol(Zzi)),
                        betad   = rep(betad_init, max(ncol(Xd),ncol(XdS))),
-                       theta   = rr0(sum(getVal(condReStruc,"blockNumTheta"))),
+                       theta   = t01(dorr, condReStruc),
                        thetazi = rr0(sum(getVal(ziReStruc,  "blockNumTheta"))),
                        thetaf  = rr0(numThetaFamily)
                      ))
@@ -439,11 +433,13 @@ mkTMBStruc <- function(formula, ziformula, dispformula,
                               weights = data.tmb$weights,
                               contrasts,
                               size = data.tmb$size,
+                              Xd = data.tmb$Xd,
                               family,
                               condReStruc,
-                              start,
+                              start = start,
                               seed,
-                              jitter.var)
+                              jitter.sd = jitter.sd,
+                              jitter.res = jitter.res)
   }
 
   randomArg <- c(if(ncol(data.tmb$Z)   > 0) "b",
@@ -548,8 +544,11 @@ getXReTrms <- function(formula, mf, fr, ranOK=TRUE, type="", contrasts, sparse=F
 
         ss <- splitForm(formula)
         #need to keep reTrmAddArgs to get n in rr
+        aa <- ss$reTrmAddArgs
+        # FIX ME: need to change it to non text
         aa <- suppressWarnings(as.numeric(gsub(".*([0-9]+).*", "\\1", ss$reTrmAddArgs)))
         aa[is.na(aa)] <- 0
+        aa[which(ss$reTrmClasses != "rr")] <- 0 #temporary fix for ar1
         ss <- unlist(ss$reTrmClasses)
 
         Z <- t(reTrms$Zt)   ## still sparse ...
@@ -627,12 +626,20 @@ getReStruc <- function(reTrms, ss=NULL, aa=NULL) {
         blksize <- diff(reTrms$Gp) / nreps
         ## figure out number of parameters from block size + structure type
 
-        blkrank <- aa
-
         if (is.null(ss)) {
             ss <- rep("us",length(blksize))
         }
 
+        if ( any(aa[ss=="rr"]==0)) {
+          aa0 <- which(aa==0 & ss=="rr")
+          aa[aa0] <- 2 #set default blockRank to 2 if it's not specified
+        }
+
+        if ( is.null(aa)) {
+          aa <- rep(0,length(blksize))#set default blockRank to 2 if it's not specified
+        }
+
+        blkrank <- aa
         covCode <- .valid_covstruct[ss]
 
         parFun <- function(struc, blksize, blkrank) {
@@ -832,9 +839,9 @@ glmmTMB <- function(
     start=NULL,
     map=NULL,
     sparseX=NULL,
-    n.init = 1,
     seed = NULL,
-    jitter.var = 0
+    jitter.sd = 0,
+    jitter.res = F
     )
 {
 
@@ -1021,7 +1028,8 @@ glmmTMB <- function(
                  map=map,
                  sparseX=sparseX,
                  seed = seed, #need to check if this works
-                 jitter.var)
+                 jitter.sd = jitter.sd,
+                 jitter.res = jitter.res)
 
     ## Allow for adaptive control parameters
     TMBStruc$control <- lapply(control, eval, envir = TMBStruc)
@@ -1029,43 +1037,8 @@ glmmTMB <- function(
     ## short-circuit
     if (!doFit) return(TMBStruc)
 
-    n.i = 1
-    if (n.init > 1)
-      seed <- sample(1:10000, n.init)
-
-    TMBStruc.ni <- TMBStruc #TMBStruc is the original, if n.init > 1 then change starting params if start == "res"
-    while(n.i <= n.init) {
-      # allow n initial iterations
-
-      if (n.i != 1) { #should it change starting parameters by default?
-        TMBStruc.ni$parameters <- with(TMBStruc,
-                                       startParams(parameters,
-                                                   allForm$formula,
-                                                   allForm$ziformula,
-                                                   allForm$dispformula,
-                                                   allForm$combForm,
-                                                   fr,
-                                                   data.tmb$yobs,
-                                                   data.tmb$weights,
-                                                   contrasts,
-                                                   data.tmb$size,
-                                                   family,
-                                                   condReStruc,
-                                                   start = "res",
-                                                   seed = seed[n.i],
-                                                   jitter.var = jitter.var))
-        }
-
-      ## pack all the bits we will need for fitTMB
-      res.ni <- fitTMB(TMBStruc.ni)
-      loglik.ni <- res.ni$obj$env$value.best[1]
-
-      if ((n.i == 1 || loglik.res > loglik.ni)  && is.finite(loglik.ni)) {
-        res <- res.ni
-        loglik.res <- res$obj$env$value.best[1]
-      }
-      n.i <- n.i + 1
-    } #end while loop
+    ## pack all the bits we will need for fitTMB
+    res <- fitTMB(TMBStruc)
     return(res)
 }
 
@@ -1257,6 +1230,7 @@ fitTMB <- function(TMBStruc) {
                               parameters,
                               map = mapArg,
                               random = randomArg,
+                              inner.control=list(mgcmax = 1e+200,maxit = 1000),
                               profile = "beta",
                               silent = !verbose,
                               DLL = "glmmTMB"))
