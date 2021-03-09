@@ -232,7 +232,8 @@ mkTMBStruc <- function(formula, ziformula, dispformula,
                        map=NULL,
                        sparseX=NULL,
                        seed = NULL,
-                       jitter.var = 0) {
+                       jitter.var = 0,
+                       control=glmmTMBControl()) {
 
   if(!is.null(seed)) set.seed(seed)
   ## handle family specified as naked list
@@ -279,7 +280,7 @@ mkTMBStruc <- function(formula, ziformula, dispformula,
                  " family")
         ## FIXME: Depending on the final estimates, we should somehow
         ## check that this fixed dispersion is small enough.
-        betad_init <- log( sqrt( .Machine$double.eps ) )
+        betad_init <- control$zerodisp_val
         dispformula[] <- ~1
         mapArg <- c(mapArg,list(betad = factor(NA))) ## Fix betad
     } else {
@@ -301,8 +302,13 @@ mkTMBStruc <- function(formula, ziformula, dispformula,
                             ranOK=FALSE, type="dispersion",
                             contrasts=contrasts, sparse=sparseX[["disp"]])
 
+<<<<<<< HEAD
     condReStruc <- with(condList, getReStruc(reTrms, ss, aa))
     ziReStruc <- with(ziList, getReStruc(reTrms, ss))
+=======
+    condReStruc <- with(condList, getReStruc(reTrms, ss, reXterms, fr))
+    ziReStruc <- with(ziList, getReStruc(reTrms, ss, reXterms, fr))
+>>>>>>> 0b1b3b4fd34293a1ee522b966f7cdac31cbf8905
 
     grpVar <- with(condList, getGrpVar(reTrms$flist))
 
@@ -344,10 +350,16 @@ mkTMBStruc <- function(formula, ziformula, dispformula,
 
   denseXval <- function(component,lst) if (sparseX[[component]]) matrix(nrow=0,ncol=0) else lst$X
   ## need a 'dgTMatrix' (double, general, Triplet representation)
+<<<<<<< HEAD
   sparseXval <- function(component,lst)
     { if (sparseX[[component]]) lst$X else Matrix::sparseMatrix(dims=c(0,0),i=integer(0),j=integer(0),x=numeric(0),giveCsparse=FALSE) }
   # function to set value for dorr
   rrVal <- function(lst) if(any(lst$ss == "rr")) 1 else 0
+=======
+  sparseXval <- function(component,lst) {
+     if (sparseX[[component]]) lst$X else nullSparseMatrix()
+  }
+>>>>>>> 0b1b3b4fd34293a1ee522b966f7cdac31cbf8905
 
   data.tmb <- namedList(
     X = denseXval("cond",condList),
@@ -519,7 +531,7 @@ getXReTrms <- function(formula, mf, fr, ranOK=TRUE, type="", contrasts, sparse=F
             ##  via deparse, but since that what was presumably done
             ##  internally to get the model frame names in the first place ...
             for (o in extractForm(fixedform,quote(offset))) {
-                offset_nm <- deparse(o)
+                offset_nm <- deparse1(o)
                 ## don't think this will happen, but ...
                 if (length(offset_nm)>1) {
                     stop("trouble reconstructing offset name")
@@ -532,8 +544,9 @@ getXReTrms <- function(formula, mf, fr, ranOK=TRUE, type="", contrasts, sparse=F
     ## ran-effects model frame (for predvars)
     ## important to COPY formula (and its environment)?
     ranform <- formula
+
     if (is.null(findbars(ranform))) {
-        reTrms <- NULL
+        reTrms <- reXterms <- NULL
         Z <- new("dgCMatrix",Dim=c(as.integer(nobs),0L)) ## matrix(0, ncol=0, nrow=nobs)
         aa <- integer(0) #added for rr
         ss <- integer(0)
@@ -547,9 +560,33 @@ getXReTrms <- function(formula, mf, fr, ranOK=TRUE, type="", contrasts, sparse=F
         reTrms <- mkReTrms(findbars(RHSForm(formula)), fr, reorder.terms=FALSE)
 
         ss <- splitForm(formula)
+<<<<<<< HEAD
         #need to keep reTrmAddArgs to get n in rr
         aa <- suppressWarnings(as.numeric(gsub(".*([0-9]+).*", "\\1", ss$reTrmAddArgs)))
         aa[is.na(aa)] <- 0
+=======
+
+        ## terms for the model matrix in each RE term
+        ## this is imperfect: it should really be done in mkReTrms/mkBlist,
+        ## where we are generating these terms anyway on the way
+        ## to constructing Z, but that's in lme4 so we can't change it
+        ## unless absolutely necessary
+        termsfun <- function(x) {
+            ## this is a little magic: copying lme4:::mkBlist approach
+            ff <- eval(substitute( ~ foo, list(foo = x[[2]]))) ## make formula from LHS
+            tt <- try(terms(ff, data=fr), silent=TRUE)         ## construct terms
+            if (inherits(tt,"try-error")) {
+                stop(
+                    sprintf("can't evaluate RE term %s: simplify?",
+                            sQuote(deparse(ff)))
+                )
+            }
+            tt
+        }
+        
+        reXterms <- lapply(ss$reTrmFormulas, termsfun)
+        
+>>>>>>> 0b1b3b4fd34293a1ee522b966f7cdac31cbf8905
         ss <- unlist(ss$reTrmClasses)
 
         Z <- t(reTrms$Zt)   ## still sparse ...
@@ -565,7 +602,11 @@ getXReTrms <- function(formula, mf, fr, ranOK=TRUE, type="", contrasts, sparse=F
     ## list(fr = fr, X = X, reTrms = reTrms, family = family, formula = formula,
     ##      wmsgs = c(Nlev = wmsgNlev, Zdims = wmsgZdims, Zrank = wmsgZrank))
 
+<<<<<<< HEAD
     namedList(X, Z, reTrms, ss, aa, terms, offset)
+=======
+    namedList(X, Z, reTrms, ss, terms, offset, reXterms)
+>>>>>>> 0b1b3b4fd34293a1ee522b966f7cdac31cbf8905
 }
 
 ##' Extract grouping variables for random effect terms from a factor list
@@ -595,6 +636,8 @@ getGrpVar <- function(x)
 ##' Must be one of \code{names(glmmTMB:::.valid_covstruct)};
 ##' default is to use an unstructured  variance-covariance
 ##' matrix (\code{"us"}) for all blocks).
+##' @param reXterms terms objects corresponding to each RE term
+##' @param fr model frame
 ##' @return a list
 ##' \item{blockNumTheta}{number of variance covariance parameters per term}
 ##' \item{blockSize}{size (dimension) of one block}
@@ -607,9 +650,13 @@ getGrpVar <- function(x)
 ##' rt2 <- lme4::lFormula(Reaction~Days+(Days|Subject),
 ##'                     sleepstudy)$reTrms
 ##' getReStruc(rt)
-##' @importFrom stats setNames dist
+##' @importFrom stats setNames dist .getXlevels
 ##' @export
+<<<<<<< HEAD
 getReStruc <- function(reTrms, ss=NULL, aa=NULL) {
+=======
+getReStruc <- function(reTrms, ss=NULL, reXterms=NULL, fr=NULL) {
+>>>>>>> 0b1b3b4fd34293a1ee522b966f7cdac31cbf8905
 
   ## information from ReTrms is contained in cnms, flist
   ## cnms: list of column-name vectors per term
@@ -650,6 +697,7 @@ getReStruc <- function(reTrms, ss=NULL, aa=NULL) {
         }
         blockNumTheta <- mapply(parFun, covCode, blksize, blkrank, SIMPLIFY=FALSE)
 
+<<<<<<< HEAD
         ans <-
             lapply( seq_along(ss), function(i) {
                 tmp <-
@@ -671,13 +719,35 @@ getReStruc <- function(reTrms, ss=NULL, aa=NULL) {
                     if (is.unsorted(times, strictly=TRUE))
                         stop("'ou' is for strictly sorted times only.")
                     tmp$times <- drop(times)
+=======
+        ans <- list()
+        for (i in seq_along(ss)) {
+            tmp <- list(blockReps = nreps[i],
+                        blockSize = blksize[i],
+                        blockNumTheta = blockNumTheta[[i]],
+                        blockCode = covCode[i]
+                        )
+            if(ss[i] == "ar1") {
+                ## FIXME: Keep this warning ?
+                if (any(reTrms$cnms[[i]][1] == "(Intercept)") )
+                    warning("AR1 not meaningful with intercept")
+                if (length(.getXlevels(reXterms[[i]],fr))!=1) {
+                    stop("ar1() expects a single, factor variable as the time component")
+>>>>>>> 0b1b3b4fd34293a1ee522b966f7cdac31cbf8905
                 }
-                if(ss[i] %in% c("exp", "gau", "mat")){
-                    coords <- parseNumLevels(reTrms$cnms[[i]])
-                    tmp$dist <- as.matrix( dist(coords) )
-                }
-                tmp
-            })
+            } else if(ss[i] == "ou"){
+                times <- parseNumLevels(reTrms$cnms[[i]])
+                if (ncol(times) != 1)
+                    stop("'ou' structure is for 1D coordinates only.")
+                if (is.unsorted(times, strictly=TRUE))
+                    stop("'ou' is for strictly sorted times only.")
+                tmp$times <- drop(times)
+            } else if(ss[i] %in% c("exp", "gau", "mat")){
+                coords <- parseNumLevels(reTrms$cnms[[i]])
+                tmp$dist <- as.matrix( dist(coords) )
+            }
+            ans[[i]] <- tmp
+        }
         setNames(ans, names(reTrms$Ztlist))
     }
 }
@@ -718,7 +788,7 @@ binomialType <- function(x) {
 ##' @param data optional data frame containing model variables.
 ##' @param family a family function, a character string naming a family function, or the result of a call to a family function (variance/link function) information. See \code{\link{family}} for a generic discussion of families or \code{\link{family_glmmTMB}} for details of \code{glmmTMB}-specific families.
 ##' @param ziformula a \emph{one-sided} (i.e., no response variable) formula for zero-inflation combining fixed and random effects: the default \code{~0} specifies no zero-inflation. Specifying \code{~.} sets the zero-inflation formula identical to the right-hand side of \code{formula} (i.e., the conditional effects formula); terms can also be added or subtracted. \strong{When using \code{~.} as the zero-inflation formula in models where the conditional effects formula contains an offset term, the offset term will automatically be dropped}. The zero-inflation model uses a logit link.
-##' @param dispformula a \emph{one-sided} formula for dispersion containing only fixed effects: the default \code{~1} specifies the standard dispersion given any family. The argument is ignored for families that do not have a dispersion parameter. For an explanation of the dispersion parameter for each family, see \code{\link{sigma}}. The dispersion model uses a log link. In Gaussian mixed models, \code{dispformula=~0} fixes the residual variance to be 0 (actually a small non-zero value: at present it is set to \code{sqrt(.Machine$double.eps)}), forcing variance into the random effects.
+##' @param dispformula a \emph{one-sided} formula for dispersion containing only fixed effects: the default \code{~1} specifies the standard dispersion given any family. The argument is ignored for families that do not have a dispersion parameter. For an explanation of the dispersion parameter for each family, see \code{\link{sigma}}. The dispersion model uses a log link. In Gaussian mixed models, \code{dispformula=~0} fixes the residual variance to be 0 (actually a small non-zero value), forcing variance into the random effects. The precise value can be controlled via \code{control=glmmTMBControl(zero_dispval=...)}; the default value is \code{sqrt(.Machine$double.eps)}.
 ##' @param weights weights, as in \code{glm}. Not automatically scaled to have sum 1.
 ##' @param offset offset for conditional model (only).
 ##' @param contrasts an optional list, e.g., \code{list(fac1="contr.sum")}. See the \code{contrasts.arg} of \code{\link{model.matrix.default}}.
@@ -889,12 +959,20 @@ glmmTMB <- function(
     environment(formula) <- parent.frame()
     call$formula <- mc$formula <- formula
     ## add offset-specified-as-argument to formula as + offset(...)
-    ## need evaluate offset within envi
-    if (!is.null(eval(substitute(offset),data,
-                      enclos=environment(formula)))) {
-        formula <- addForm0(formula,makeOp(substitute(offset),op=quote(offset)))
+    ## need to evaluate offset within environment
+    ## how do we figure out where offset exists/whether it has
+    ## been prematurely evaluated?
+    offsub <- substitute(offset)
+    if (is.numeric(offsub)) {
+        ## length may cause problems in formula
+        data[["..offset"]] <- offset
+        offsub <-quote(..offset)
     }
-
+    if (!is.null(eval(offsub,data,
+                      enclos=environment(formula)))) {
+        formula <- addForm0(formula,makeOp(offsub,
+                                           op=quote(offset)))
+    }
 
     environment(ziformula) <- environment(formula)
     call$ziformula <- ziformula
@@ -908,6 +986,7 @@ glmmTMB <- function(
     mf <- mf[c(1L, m)]
     mf$drop.unused.levels <- TRUE
     mf[[1]] <- as.name("model.frame")
+    mf$data <- data ## propagate ..offset modification?
 
     ## replace . in ziformula with conditional formula, ignoring offset
     if (inForm(ziformula,quote(.))) {
@@ -1003,6 +1082,7 @@ glmmTMB <- function(
                             family$family))
         }
     }
+<<<<<<< HEAD
 
     TMBStruc <-
       mkTMBStruc(formula, ziformula, dispformula,
@@ -1022,6 +1102,26 @@ glmmTMB <- function(
                  sparseX=sparseX,
                  seed = seed, #need to check if this works
                  jitter.var)
+=======
+    
+    TMBStruc <- 
+        mkTMBStruc(formula, ziformula, dispformula,
+                   combForm,
+                   mf, fr,
+                   yobs=y,
+                   respCol,
+                   weights,
+                   contrasts=contrasts,
+                   family=family,
+                   se=se,
+                   call=call,
+                   verbose=verbose,
+                   REML=REML,
+                   start=start,
+                   map=map,
+                   sparseX=sparseX,
+                   control=control)
+>>>>>>> 0b1b3b4fd34293a1ee522b966f7cdac31cbf8905
 
     ## Allow for adaptive control parameters
     TMBStruc$control <- lapply(control, eval, envir = TMBStruc)
@@ -1080,6 +1180,7 @@ glmmTMB <- function(
 ##'                  the negative log-likelihood in parallel
 ##' @param optimizer Function to use in model fitting. See \code{Details} for required properties of this function.
 ##' @param eigval_check Check eigenvalues of variance-covariance matrix? (This test may be very slow for models with large numbers of fixed-effect parameters.)
+##' @param zerodisp_val value of the dispersion parameter when \code{dispformula=~0} is specified
 ##' @importFrom TMB openmp
 ##' @details
 ##' The general non-linear optimizer \code{nlminb} is used by
@@ -1126,7 +1227,8 @@ glmmTMBControl <- function(optCtrl=NULL,
                            profile=FALSE,
                            collect=FALSE,
                            parallel = NULL,
-                           eigval_check = TRUE) {
+                           eigval_check = TRUE,
+                           zerodisp_val=log(sqrt(.Machine$double.eps))) {
 
     if (is.null(optCtrl) && identical(optimizer,nlminb)) {
         optCtrl <- list(iter.max=300, eval.max=400)
@@ -1145,7 +1247,7 @@ glmmTMBControl <- function(optCtrl=NULL,
     ##           (family$family != "tweedie")
     ## (TMB tweedie derivatives currently slow)
     namedList(optCtrl, profile, collect, parallel, optimizer, optArgs,
-              eigval_check)
+              eigval_check, zerodisp_val)
 }
 
 ##' collapse duplicated observations
